@@ -115,7 +115,7 @@ sub _Main{
 	my $exo_stats = $self->{stats}{exo};
 	foreach my $type(qw(refined bypass)){
 		foreach (keys %{$exo_stats->{$type}}){
-			$exo_stats->{'r+b'}{$_} += $exo_stats->{$type}{$_}
+			$exo_stats->{'re+by'}{$_} += $exo_stats->{$type}{$_}
 		} 
 	}
 	
@@ -136,31 +136,38 @@ sub _Main{
 		open($ofh, ">", $opt{out});
 	}
 
-	my $pat = "%s\t%0.3f".("\t%d"x5)."\n";
+	my $pat = "%s:%s\t%0.3f".("\t%d"x6)."\n";
+
 
 	my $stats = $self->{stats}{gmap}{p0};
 	my $type;
+	my @cs = qw(nr ma mm de in dr);
+
+	# header
+	printf $ofh "%s".("\t%s"x7)."\n", '# source', qw( idy reads match mismatch deletion insertion dropped);
+	print $ofh ('-'x100)."\n";
+
 	foreach $type (sort keys %{$stats}){
 		next if $type eq 'chimera' or $type eq '1-5';
-		printf $ofh $pat, $type, _acc($stats->{$type}) || -1, @{$stats->{$type}}{qw(ma mm de in dr)};
+		printf $ofh $pat, 'gmap:paths', $type, _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
 	}
-	print $ofh ('-'x80)."\n";
+	print $ofh ('-'x100)."\n";
 	$type = '1-5';
-	printf $ofh $pat, $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{qw(ma mm de in dr)};
+	printf $ofh $pat, 'gmap:paths', $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
 	
 	print $ofh "\n";
 	$type = 'chimera';
-	printf $ofh $pat, $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{qw(ma mm de in dr)};
+	printf $ofh $pat, 'gmap', $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
 	print $ofh "\n";
 	
 	$stats = $self->{stats}{exo};
-	foreach $type(qw(refined bypass)){
-		printf $ofh $pat, $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{qw(ma mm de in dr)};
+	foreach $type(qw(bypass preref refined)){
+		printf $ofh $pat, 'exo', $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
 	}
 
-	print $ofh ('-'x80)."\n";
-	$type = 'r+b';
-	printf $ofh $pat, $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{qw(ma mm de in dr)};
+	print $ofh ('-'x100)."\n";
+	$type = 're+by';
+	printf $ofh $pat, 'exo', $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
 
 	if($opt{out} && $opt{out} ne '-'){
 		close $ofh;
@@ -230,6 +237,7 @@ sub new{
 			},
 			exo => {
 				refined => {
+					nr => 0,
 					ma => 0,
 					mm => 0,
 					de => 0,
@@ -237,6 +245,15 @@ sub new{
 					dr => 0,
 				},
 				bypass => {
+					nr => 0,
+					ma => 0,
+					mm => 0,
+					de => 0,
+					in => 0,
+					dr => 0,
+				},
+				preref => {
+					nr => 0,
 					ma => 0,
 					mm => 0,
 					de => 0,
@@ -448,22 +465,30 @@ sub parse_gmap{
 			# store gmap stats
 			# chimera a stored pc=0 -> individually
 			
+			$S{p0}{$pc}{nr}++;
 			$S{p0}{$pc}{dr} += $dr;
 			$S{p0}{$pc}{ma} += $ma;
 			$S{p0}{$pc}{mm} += $mm;
 			$S{p0}{$pc}{in} += $in;
 			$S{p0}{$pc}{de} += $de;
-	
 			# run (and store) exonerate stats
 			next if $r->{chimera};
 			
 			if($opt{refine_all} || ($opt{refine_partials} && $dr)){
 				# exonerate
+				$self->{stats}{exo}{preref}{nr}++;
+				$self->{stats}{exo}{preref}{dr} += $dr;
+				$self->{stats}{exo}{preref}{ma} += $ma;
+				$self->{stats}{exo}{preref}{mm} += $mm;
+				$self->{stats}{exo}{preref}{in} += $in;
+				$self->{stats}{exo}{preref}{de} += $de;
+				
 				$self->gmap2seqs($r);
 				$self->run_exonerate();
 			}else{
 				$L->debug('Skipping refinement');
 				# use unrefined stats as exo stats
+				$self->{stats}{exo}{bypass}{nr}++;
 				$self->{stats}{exo}{bypass}{dr} += $dr;
 				$self->{stats}{exo}{bypass}{ma} += $ma;
 				$self->{stats}{exo}{bypass}{mm} += $mm;
@@ -608,6 +633,7 @@ realignment of TRANSCRIPTOMIC reads using exonerate
 		my ($qid,$qlen,$qalnlen,$et,$em)= split("\t");
 		#printf ("$_\t%0.2f\n", $qalnlen/$qlen*100);
 		#$qsim/=100;
+		$self->{stats}{exo}{refined}{nr}++;
 		$self->{stats}{exo}{refined}{ma}+=$et;
 		$self->{stats}{exo}{refined}{mm}+=$em;
 		$self->{stats}{exo}{refined}{dr}+=($qlen - $qalnlen);
