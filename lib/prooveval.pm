@@ -77,8 +77,11 @@ sub _Main{
 			refine_all|refine-all!
 			splice!
 			debug!
+			help
 		)
 	) or exit(255);
+	
+	pod2usage(1) if $opt{help};
 	
 	$opt{out} = basename($opt{qry}[0]).'.stats' unless $opt{out};
 	
@@ -205,6 +208,15 @@ sub new{
 		return bless ({%$proto, @_}, $class);
 	}
 
+	my %empty_stats = (
+		nr => 0,
+		ma => 0,
+		mm => 0,
+		de => 0,
+		in => 0,
+		dr => 0,
+	);
+
 	# class method -> construct + overwrite
 	# init empty obj
 	$self = {
@@ -233,33 +245,20 @@ sub new{
 					edge_mapped_count => 0,
 					multi_exon_count => 0,
 				},
-				p0 => {}, # 0 == chimeric
+				p0 => {
+					1 => {%empty_stats},
+					2 => {%empty_stats},
+					3 => {%empty_stats},
+					4 => {%empty_stats},
+					5 => {%empty_stats},
+					'1-5' => {%empty_stats},
+					'chimera' => {%empty_stats},
+				}, # 0 == chimeric
 			},
 			exo => {
-				refined => {
-					nr => 0,
-					ma => 0,
-					mm => 0,
-					de => 0,
-					in => 0,
-					dr => 0,
-				},
-				bypass => {
-					nr => 0,
-					ma => 0,
-					mm => 0,
-					de => 0,
-					in => 0,
-					dr => 0,
-				},
-				preref => {
-					nr => 0,
-					ma => 0,
-					mm => 0,
-					de => 0,
-					in => 0,
-					dr => 0,
-				}
+				refined => {%empty_stats},
+				bypass => {%empty_stats},
+				preref => {%empty_stats},
 			},
 		},
 		_tmp_exo_fh => undef,
