@@ -136,20 +136,31 @@ sub _Main{
 		open($ofh, ">", $opt{out});
 	}
 
+	my $pat = "%s\t%0.3f".("\t%d"x5)."\n";
+
 	my $stats = $self->{stats}{gmap}{p0};
-	foreach (sort keys %{$stats}){
-		printf $ofh "%-10s %0.3f\n", $_,  _acc($stats->{$_}) || -1;
+	my $type;
+	foreach $type (sort keys %{$stats}){
+		next if $type eq 'chimera' or $type eq '1-5';
+		printf $ofh $pat, $type, _acc($stats->{$type}) || -1, @{$stats->{$type}}{qw(ma mm de in dr)};
 	}
-
+	print $ofh ('-'x80)."\n";
+	$type = '1-5';
+	printf $ofh $pat, $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{qw(ma mm de in dr)};
+	
+	print $ofh "\n";
+	$type = 'chimera';
+	printf $ofh $pat, $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{qw(ma mm de in dr)};
+	print $ofh "\n";
+	
 	$stats = $self->{stats}{exo};
-	foreach (qw(refined bypass)){
-		printf $ofh "%-10s %0.3f\n", $_,  _acc($stats->{$_}) || -1;
+	foreach $type(qw(refined bypass)){
+		printf $ofh $pat, $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{qw(ma mm de in dr)};
 	}
 
-	print $ofh ('-'x20)."\n";
-	foreach (qw(r+b)){
-		printf $ofh "%-10s %0.3f\n", $_,  _acc($stats->{$_}) || -1;
-	}
+	print $ofh ('-'x80)."\n";
+	$type = 'r+b';
+	printf $ofh $pat, $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{qw(ma mm de in dr)};
 
 	if($opt{out} && $opt{out} ne '-'){
 		close $ofh;
