@@ -68,9 +68,11 @@ sub _Main{
 			tmp_dir=s
 			gmap_bin|gmap-bin=s
 			exonerate_bin|exonerate-bin=s
+			exo_sry|exonerate-sry=s
 			allow_edge_mappings|allow-edge-mappings!
 			refine_partials|refine-partials!
 			refine_all|refine-all!
+			splice!
 			keep_tmp|keep-tmp!
 			debug!
 		)
@@ -110,7 +112,7 @@ sub _Main{
 	print Dumper($self->{stats});
 	
 	my $exo = $self->{stats}{exo};
-	printf "%0.5f\n", $exo->{ma} * 100 / ($exo->{ma}+$exo->{mm}+$exo->{de}+$exo->{in}+$exo->{dr});
+	#printf "%0.5f\n", $exo->{ma} * 100 / ($exo->{ma}+$exo->{mm}+$exo->{de}+$exo->{in}+$exo->{dr});
 }
 
 
@@ -160,10 +162,13 @@ sub new{
 		stats => {
 			record_count => 0, 
 			gmap => {
-				unmapped_count => 0, 
-				chimera_count => 0,
-				edge_mapped_count => 0,
-				p0 => [], # 0 == chimeric
+				excluded => {
+					chimera_count => 0,
+					unmapped_count => 0, 
+					edge_mapped_count => 0,
+					multi_exon_count => 0,
+				},
+				p0 => {}, # 0 == chimeric
 			},
 			exo => {
 				
@@ -266,13 +271,15 @@ sub parse_gmap{
 	$self->{stats}{gmap} = \%S;
 	
 	while(my $r = $gp->next_record){
+		last if $self->{stats}{record_count} >= 25;
+		
 		$self->{stats}{record_count}++;
 		my $pc = @{$r->{paths}};
 		unless($pc){
-			$S{unmapped_count}++;
+			$S{excluded}{unmapped_count}++;
 		}else{
 			if ($r->{chimera}){
-				$pc = 0;
+				$pc = 'chimera';
 			};
 			
 			# analyse primary path: path "0""
@@ -287,11 +294,21 @@ sub parse_gmap{
 					|| 
 					$p0->{qry_len} > $p0->{ref_len} - $p0->{ref_hit_from}
 				){
-					$S{edge_mapped_count}++;
+					$S{excluded}{edge_mapped_count}++;
 					next; 
 				}
 			}
 			# N's (ref/qry)
+			# TODO
+			
+			# multi exon genomic
+			unless($opt{splice}){
+				if($p0->{number_of_exons} > 1){
+					$S{excluded}{multi_exon_count}++;
+					next;
+				}
+			}
+			
 
 			my ($dr, $ma, $mm, $in, $de) = (0,0,0,0,0);
 			
@@ -299,6 +316,12 @@ sub parse_gmap{
 			$mm +=$p0->{aln_mm};
 			$in +=$p0->{aln_ins};
 			$de +=$p0->{aln_del};
+			
+			
+			################################################
+			# What shall we do with crappy alignments !!!! #
+			################################################
+			
 
 =pod	
 	#		if($opt{ref_cov}){
@@ -313,13 +336,23 @@ sub parse_gmap{
 			# include secondary path in analysis if chimera
 			if($r->{chimera}){
 				my $p1 = $r->{paths}[1];
-				$S{chimera_count}++;
+
+				# multi exon genomic
+				unless($opt{splice}){
+					if($p1->{number_of_exons} > 1){
+						$S{excluded}{multi_exon_count}++;
+						next;
+					}
+				}
+
+				$S{excluded}{chimera_count}++;
 				$ma +=$p1->{aln_ma};
 				$mm +=$p1->{aln_mm};
 				$in +=$p1->{aln_ins};
 				$de +=$p1->{aln_del};
 	
 				$dr = ($p0->{qry_len}-$p0->{qry_hit_len}-$p1->{qry_hit_len});
+
 
 =pod				
 	#			if($opt{ref_cov}){
@@ -335,12 +368,18 @@ sub parse_gmap{
 				$dr = ($p0->{qry_len}-$p0->{qry_hit_len});
 			}
 			
-			$S{p0}[$pc]{dr} += $dr;
-			$S{p0}[$pc]{ma} += $ma;
-			$S{p0}[$pc]{mm} += $mm;
-			$S{p0}[$pc]{in} += $in;
-			$S{p0}[$pc]{de} += $de;
+			
+			# store gmap stats
+			# chimera a stored pc=0 -> individually
+			
+			$S{p0}{$pc}{dr} += $dr;
+			$S{p0}{$pc}{ma} += $ma;
+			$S{p0}{$pc}{mm} += $mm;
+			$S{p0}{$pc}{in} += $in;
+			$S{p0}{$pc}{de} += $de;
 	
+			# run (and store) exonerate stats
+			next if $r->{chimera};
 			
 			if($opt{refine_all} || ($opt{refine_partials} && $dr)){
 				# exonerate
@@ -348,12 +387,12 @@ sub parse_gmap{
 				$self->run_exonerate();
 			}else{
 				$L->debug('Skipping refinement');
-				# use unrefined stats like exo stats
-				$self->{stats}{exo}{dr} += $dr;
-				$self->{stats}{exo}{ma} += $ma;
-				$self->{stats}{exo}{mm} += $mm;
-				$self->{stats}{exo}{in} += $in;
-				$self->{stats}{exo}{de} += $de;
+				# use unrefined stats as exo stats
+				$self->{stats}{exo}{bypass}{dr} += $dr;
+				$self->{stats}{exo}{bypass}{ma} += $ma;
+				$self->{stats}{exo}{bypass}{mm} += $mm;
+				$self->{stats}{exo}{bypass}{in} += $in;
+				$self->{stats}{exo}{bypass}{de} += $de;
 			}
 			
 			
@@ -361,8 +400,6 @@ sub parse_gmap{
 			
 		}
 	}
-	print "\n";
-	
 }
 
 
@@ -401,10 +438,8 @@ Run exonrate for a mapped read to refine alignment results
 sub run_exonerate{
 	my ($self) = @_;
 	my $exo_sry_fh = $self->{_exo_sry_fh};
-	print "\r".$self->{stats}{record_count} unless $self->{stats}{record_count}%100;
+	#print "\r".$self->{stats}{record_count} unless $self->{stats}{record_count}%100;
 	
-	#last if $self->{stats}{record_count} > 25;
-
 =pod
 #		--frameshift -5
 #		--model est2genome
@@ -454,9 +489,10 @@ realignment of TRANSCRIPTOMIC reads using exonerate
 		exonerate 
 		--querytype dna
 		--targettype dna
-
+	),
+	$opt{splice} ? qw(--model e2g) : qw(--model a:b),
+	qw(
 		--exhaustive 1
-		--model affine:bestfit
 		--bestn 1
 		--subopt n
 		--frameshift -5
@@ -496,9 +532,9 @@ realignment of TRANSCRIPTOMIC reads using exonerate
 		my ($qid,$qlen,$qalnlen,$et,$em)= split("\t");
 		#printf ("$_\t%0.2f\n", $qalnlen/$qlen*100);
 		#$qsim/=100;
-		$self->{stats}{exo}{ma}+=$et;
-		$self->{stats}{exo}{mm}+=$em;
-		$self->{stats}{exo}{dr}+=($qlen - $qalnlen);
+		$self->{stats}{exo}{refined}{ma}+=$et;
+		$self->{stats}{exo}{refined}{mm}+=$em;
+		$self->{stats}{exo}{refined}{dr}+=($qlen - $qalnlen);
 	}
 	
 	
@@ -517,8 +553,8 @@ realignment of TRANSCRIPTOMIC reads using exonerate
 		my @unknown_cigar = grep{/[^DIM]/}keys %cigar;
 		$L->logdie("Unknown cigars: @unknown_cigar") if @unknown_cigar; 
 		
-		$self->{stats}{exo}{de}+= $cigar{'D'} || 0;
-		$self->{stats}{exo}{in}+= $cigar{'I'} || 0;
+		$self->{stats}{exo}{refined}{de}+= $cigar{'D'} || 0;
+		$self->{stats}{exo}{refined}{in}+= $cigar{'I'} || 0;
 	}
 
 	
