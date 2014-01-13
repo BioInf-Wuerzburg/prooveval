@@ -17,6 +17,8 @@ use Data::Dumper;
 $Data::Dumper::Sortkeys = 1;
 
 use File::Path;
+use File::Basename;
+use File::Spec;
 
 use Bio::DB::Fasta;
 use SeqStore;
@@ -37,7 +39,7 @@ see git log
 our $VERSION = '0.01';
 
 my %opt = (
-	refine_partials => 1
+	refine_partials => 1,
 );
 
 # run _Main if modulino is used as executable
@@ -64,19 +66,21 @@ sub _Main{
 		\%opt, qw(
 			ref=s@{1,}
 			qry=s@{1,}
+			out=s
 			gmap_sry|gmap-sry=s
-			tmp_dir=s
+			tmp_root|tmp-root=s
+			keep_tmp|keep-tmp!
 			gmap_bin|gmap-bin=s
 			exonerate_bin|exonerate-bin=s
-			exo_sry|exonerate-sry=s
 			allow_edge_mappings|allow-edge-mappings!
 			refine_partials|refine-partials!
 			refine_all|refine-all!
 			splice!
-			keep_tmp|keep-tmp!
 			debug!
 		)
 	) or exit(255);
+	
+	$opt{out} = basename($opt{qry}[0]).'.stats' unless $opt{out};
 	
 	$L->level($DEBUG) if $opt{debug};
 	$L->debug('Verbose level set to DEBUG');
@@ -88,7 +92,6 @@ sub _Main{
 	$self->prep_ref();
 	
 	$self->prep_qry();
-	
 	
 	## run
 		
@@ -108,27 +111,58 @@ sub _Main{
 		# align
 		# parse
 	
+	# combined stats
+	my $exo_stats = $self->{stats}{exo};
+	foreach my $type(qw(refined bypass)){
+		foreach (keys %{$exo_stats->{$type}}){
+			$exo_stats->{'r+b'}{$_} += $exo_stats->{$type}{$_}
+		} 
+	}
 	
+	my $path_stats = $self->{stats}{gmap}{p0};
+	foreach my $type(keys %$path_stats){
+		next if $type eq 'chimera';
+		foreach (keys %{$path_stats->{$type}}){
+			$path_stats->{'1-5'}{$_} += $path_stats->{$type}{$_}
+		} 
+	}
+	
+	
+	$L->debug(Dumper($self->{stats}));
 
+	my $ofh = \*STDOUT;
 
+	if($opt{out} && $opt{out} ne '-'){
+		open($ofh, ">", $opt{out});
+	}
 
 	my $stats = $self->{stats}{gmap}{p0};
 	foreach (sort keys %{$stats}){
-		printf "%10s %0.5f\n", $_, _acc($stats->{$_});
+		printf $ofh "%-10s %0.3f\n", $_,  _acc($stats->{$_}) || -1;
 	}
 
 	$stats = $self->{stats}{exo};
-	foreach (sort keys %{$stats}){
-		printf "%10s %0.5f\n", $_, _acc($stats->{$_});
+	foreach (qw(refined bypass)){
+		printf $ofh "%-10s %0.3f\n", $_,  _acc($stats->{$_}) || -1;
 	}
 
-	print Dumper($self->{stats});
+	print $ofh ('-'x20)."\n";
+	foreach (qw(r+b)){
+		printf $ofh "%-10s %0.3f\n", $_,  _acc($stats->{$_}) || -1;
+	}
+
+	if($opt{out} && $opt{out} ne '-'){
+		close $ofh;
+	}
+
 }
 
 
 sub _acc{
 	my $s = shift;
-	return $s->{ac} = $s->{ma} * 100 / ($s->{ma}+$s->{mm}+$s->{de}+$s->{in}+$s->{dr});
+	my $bases = $s->{ma}+$s->{mm}+$s->{de}+$s->{in}+$s->{dr};
+	return undef unless $bases;
+	return $s->{ac} = $s->{ma} * 100 / $bases;
 }
 
 
@@ -159,17 +193,17 @@ sub new{
 		gmap_bin => 'gmap',				# assume exported
 		exonerate_bin => 'exonerate', 	# assume exported
 		keep_tmp => 0,
-		tmp_dir => '/tmp', 					# set to RAM-disk to increase speed
+		tmp_root => '',				# set to RAM-disk to increase speed
 		ref => [],
 		qry => [],
 		gmap_sry => undef,
-		exo_sry => 'prooveval.exonerate.aln',
 		# overwrite with params
 		@_,
 		# protected
 		tmp => undef,
 		tmp_qry => undef,
 		tmp_ref => undef,
+		tmp_exo => undef,
 		ref_store => undef,
 		qry_store => undef,
 		stats => {
@@ -184,16 +218,34 @@ sub new{
 				p0 => {}, # 0 == chimeric
 			},
 			exo => {
-				
+				refined => {
+					ma => 0,
+					mm => 0,
+					de => 0,
+					in => 0,
+					dr => 0,
+				},
+				bypass => {
+					ma => 0,
+					mm => 0,
+					de => 0,
+					in => 0,
+					dr => 0,
+				}
 			},
 		},
-		_exo_sry_fh => undef,
+		_tmp_exo_fh => undef,
 	};
+
+	$self->{tmp} = File::Temp->newdir(
+			"prooveval-XXXXXXXXXX", 
+			DIR => $opt{tmp_root}, 
+			CLEANUP => 0
+	);
 	
-	$self->{tmp} = $self->{tmp_dir}.'/prooveval/';
-	$self->{tmp_qry} = $self->{tmp}.'/qry.fa';
-	$self->{tmp_ref} = $self->{tmp}.'/ref.fa';
-	
+	$self->{tmp_qry} = File::Spec->catfile($self->{tmp},'qry.fa');		
+	$self->{tmp_ref} = File::Spec->catfile($self->{tmp},'ref.fa');		
+	$self->{tmp_exo} = File::Spec->catfile($self->{tmp},'exonerate.aln');		
 	
 	bless $self, $proto;
 	$L->debug(ref $self, ' instantiated');
@@ -209,11 +261,11 @@ sub new{
 	}
 	
 	#
-	open(EXO, '>', $self->{exo_sry}) 
-		or $L->logdie($!, ": ", $self->{exo_sry});
+	open(EXO, '>', $self->{tmp_exo}) 
+		or $L->logdie($!, ": ", $self->{tmp_exo});
 	close EXO;
-	open($self->{_exo_sry_fh}, '>>', $self->{exo_sry}) 
-		or $L->logdie($!, ": ", $self->{exo_sry});
+	open($self->{_tmp_exo_fh}, '>>', $self->{tmp_exo}) 
+		or $L->logdie($!, ": ", $self->{tmp_exo});
 	
 	# return
 	return $self;
@@ -450,7 +502,7 @@ Run exonrate for a mapped read to refine alignment results
 
 sub run_exonerate{
 	my ($self) = @_;
-	my $exo_sry_fh = $self->{_exo_sry_fh};
+	my $tmp_exo_fh = $self->{_tmp_exo_fh};
 	#print "\r".$self->{stats}{record_count} unless $self->{stats}{record_count}%100;
 	
 =pod
@@ -531,14 +583,14 @@ realignment of TRANSCRIPTOMIC reads using exonerate
 	
 	$L->debug($exo_cmd);
 	
-	my @exo_sry = qx($exo_cmd); 
-	print $exo_sry_fh @exo_sry;
-	chomp @exo_sry;
+	my @tmp_exo = qx($exo_cmd); 
+	print $tmp_exo_fh @tmp_exo;
+	chomp @tmp_exo;
 	
-	my @exo_ryo = grep {/^>/}@exo_sry;
-	my @exo_cigar = grep {/^cigar: /}@exo_sry;
+	my @exo_ryo = grep {/^>/}@tmp_exo;
+	my @exo_cigar = grep {/^cigar: /}@tmp_exo;
 
-	#print Dumper(\@exo_aln);
+	#print Dumper(\@tmp_exo);
 	
 	foreach (@exo_ryo){
 		s/^>//;
