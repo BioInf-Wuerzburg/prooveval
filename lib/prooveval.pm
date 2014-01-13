@@ -271,7 +271,7 @@ sub parse_gmap{
 	$self->{stats}{gmap} = \%S;
 	
 	while(my $r = $gp->next_record){
-		last if $self->{stats}{record_count} >= 25;
+		#last if $self->{stats}{record_count} >= 25;
 		
 		$self->{stats}{record_count}++;
 		my $pc = @{$r->{paths}};
