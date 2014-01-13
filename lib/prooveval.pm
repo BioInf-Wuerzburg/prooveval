@@ -429,21 +429,25 @@ sub parse_gmap{
 			if($r->{chimera}){
 				my $p1 = $r->{paths}[1];
 
-				# multi exon genomic
-				unless($opt{splice}){
-					if($p1->{number_of_exons} > 1){
-						$S{excluded}{multi_exon_count}++;
-						next;
+				if($p1){ # for some reasons there are single exon chimeras
+					# multi exon genomic
+					unless($opt{splice}){
+						if($p1->{number_of_exons} > 1){
+							$S{excluded}{multi_exon_count}++;
+							next;
+						}
 					}
-				}
-
-				$S{excluded}{chimera_count}++;
-				$ma +=$p1->{aln_ma};
-				$mm +=$p1->{aln_mm};
-				$in +=$p1->{aln_ins};
-				$de +=$p1->{aln_del};
 	
-				$dr = ($p0->{qry_len}-$p0->{qry_hit_len}-$p1->{qry_hit_len});
+					$S{excluded}{chimera_count}++;
+					$ma +=$p1->{aln_ma};
+					$mm +=$p1->{aln_mm};
+					$in +=$p1->{aln_ins};
+					$de +=$p1->{aln_del};
+		
+					$dr = ($p0->{qry_len}-$p0->{qry_hit_len}-$p1->{qry_hit_len});
+				}else{
+					# single path chimera
+				}
 
 
 =pod				
