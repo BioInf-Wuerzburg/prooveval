@@ -109,14 +109,27 @@ sub _Main{
 		# parse
 	
 	
+
+
+
+	my $stats = $self->{stats}{gmap}{p0};
+	foreach (sort keys %{$stats}){
+		printf "%10s %0.5f\n", $_, _acc($stats->{$_});
+	}
+
+	$stats = $self->{stats}{exo};
+	foreach (sort keys %{$stats}){
+		printf "%10s %0.5f\n", $_, _acc($stats->{$_});
+	}
+
 	print Dumper($self->{stats});
-	
-	my $exo = $self->{stats}{exo};
-	#printf "%0.5f\n", $exo->{ma} * 100 / ($exo->{ma}+$exo->{mm}+$exo->{de}+$exo->{in}+$exo->{dr});
 }
 
 
-
+sub _acc{
+	my $s = shift;
+	return $s->{ac} = $s->{ma} * 100 / ($s->{ma}+$s->{mm}+$s->{de}+$s->{in}+$s->{dr});
+}
 
 
 
