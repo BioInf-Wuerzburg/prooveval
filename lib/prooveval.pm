@@ -28,13 +28,91 @@ use Gmap::Record;
 use Fasta::Parser;
 use Fasta::Seq;
 
-=head1 Changelog
+=head1 NAME
+
+prooveval
+
+=head1 DESCRIPTION
+
+Analyse proovread correction results using gmap mappings (and exonerate 
+refinements).
+
+=head1 CHANGELOG
 
 see git log
 
 =cut
+	
+=head1 SYNOPSIS
+
+  prooveval [<OPTIONS>] --ref <genome.fa> --qry <reads.fa> --gmap-sry <reads.sry>
+  cat <reads.sry> | prooveval [<OPTIONS>] --ref <genome.fa> --qry <reads.fa> --gmap-sry -
+
+=cut
+
+=head1 OPTIONS
+
+=over
+
+=item -r|--ref=<FASTA>
+
+Reference file, usually genome.
+
+=item -q|--qry=<FASTA>
+
+Query read file.
+
+=item -g|--gmap-sry=<GMAPSRY|->
+
+Gmap mapping results for --qry against --ref in gmap summary format. '-' 
+ for STDIN. 
+
+=item [-o|--out=<PATH|->] [`basename --qry`]
+
+Output prefix. '-' for STDOUT.
+
+=item [-t|transcriptomic] [OFF]
+
+Expect spliced mappings in gmap and exonerate.
+
+=item [--[no]-refine-partials] [ON]
+
+Refine partial gmap mappings (coverage < 100%) with exonerate.
+
+=item [--[no]-refine-all] [OFF]
+
+Refine all gmap mappings with exonerate.
+
+
+=item [--include-edge-mappings] [OFF]
+
+Do not exclude mappings overlapping reference boundaries in statistics.
+
+=item [-T|--tmp-root=<PATH>] [/tmp]
+
+Root location for temporary files.
+
+=item [-k|--keep-tmp] [OFF]
+
+Do not remove temporary files after run.
+
+=item [--gmap-bin=<PATH>] [gmap]
+
+Path to gmap binary.
+
+=item [--exonerate-bin=<PATH>] [exonerate]
+
+Path to exonerate binary.
+
+=back
+
+=cut
 
 ##------------------------------------------------------------------------##
+
+=head1 GLOBALS
+
+=cut
 
 our $VERSION = '0.01';
 
@@ -47,6 +125,10 @@ __PACKAGE__->_Main(@ARGV) unless caller;
 
 
 ##------------------------------------------------------------------------##
+
+=head1 Main
+
+=cut
 
 sub _Main{
 	my $class = shift;
@@ -64,24 +146,30 @@ sub _Main{
 	
 	GetOptions( 	# NOTE: defaults are set in new();
 		\%opt, qw(
-			ref=s@{1,}
-			qry=s@{1,}
-			out=s
-			gmap_sry|gmap-sry=s
-			tmp_root|tmp-root=s
-			keep_tmp|keep-tmp!
-			gmap_bin|gmap-bin=s
-			exonerate_bin|exonerate-bin=s
-			allow_edge_mappings|allow-edge-mappings!
+			ref|r=s@{1,}
+			qry|q=s@{1,}
+			out|o=s
+			gmap_sry|gmap-sry|g=s
+			transcriptomic|s!
 			refine_partials|refine-partials!
 			refine_all|refine-all!
-			splice!
+			include_edge_mappings|include-edge-mappings!
+			gmap_bin|gmap-bin=s
+			exonerate_bin|exonerate-bin=s
+			tmp_root|tmp-root|T=s
+			keep_tmp|keep-tmp|k!
 			debug!
-			help
+			help|h
 		)
 	) or exit(255);
 	
 	pod2usage(1) if $opt{help};
+	
+	# required	
+	for(qw(ref qry gmap_sry)){
+		pod2usage("required: --$_") unless defined ($opt{$_}) 
+	};
+	
 	
 	$opt{out} = basename($opt{qry}[0]).'.stats' unless $opt{out};
 	
@@ -106,85 +194,17 @@ sub _Main{
 	}
 	
 	# parse gmap-sry
-	$self->parse_gmap;
-	
 	# exonerate
 		# ref: db, cut using gmap coords
 		# qry: SeqStore fetch
 		# align
 		# parse
+	$self->parse_gmap;
 	
-	# combined stats
-	my $exo_stats = $self->{stats}{exo};
-	foreach my $type(qw(refined bypass)){
-		foreach (keys %{$exo_stats->{$type}}){
-			$exo_stats->{'re+by'}{$_} += $exo_stats->{$type}{$_}
-		} 
-	}
-	
-	my $path_stats = $self->{stats}{gmap}{p0};
-	foreach my $type(keys %$path_stats){
-		next if $type eq 'chimera';
-		foreach (keys %{$path_stats->{$type}}){
-			$path_stats->{'1-5'}{$_} += $path_stats->{$type}{$_}
-		} 
-	}
-	
-	
-	$L->debug(Dumper($self->{stats}));
-
-	my $ofh = \*STDOUT;
-
-	if($opt{out} && $opt{out} ne '-'){
-		open($ofh, ">", $opt{out});
-	}
-
-	my $pat = "%s:%s\t%0.3f".("\t%d"x6)."\n";
-
-
-	my $stats = $self->{stats}{gmap}{p0};
-	my $type;
-	my @cs = qw(nr ma mm de in dr);
-
-	# header
-	printf $ofh "%s".("\t%s"x7)."\n", '# source', qw( idy reads match mismatch deletion insertion dropped);
-	print $ofh ('-'x100)."\n";
-
-	foreach $type (sort keys %{$stats}){
-		next if $type eq 'chimera' or $type eq '1-5';
-		printf $ofh $pat, 'gmap:paths', $type, _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
-	}
-	print $ofh ('-'x100)."\n";
-	$type = '1-5';
-	printf $ofh $pat, 'gmap:paths', $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
-	
-	print $ofh "\n";
-	$type = 'chimera';
-	printf $ofh $pat, 'gmap', $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
-	print $ofh "\n";
-	
-	$stats = $self->{stats}{exo};
-	foreach $type(qw(bypass preref refined)){
-		printf $ofh $pat, 'exo', $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
-	}
-
-	print $ofh ('-'x100)."\n";
-	$type = 're+by';
-	printf $ofh $pat, 'exo', $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
-
-	if($opt{out} && $opt{out} ne '-'){
-		close $ofh;
-	}
+	$self->stats
 
 }
 
-
-sub _acc{
-	my $s = shift;
-	my $bases = $s->{ma}+$s->{mm}+$s->{de}+$s->{in}+$s->{dr};
-	return undef unless $bases;
-	return $s->{ac} = $s->{ma} * 100 / $bases;
-}
 
 
 
@@ -223,7 +243,7 @@ sub new{
 		gmap_bin => 'gmap',				# assume exported
 		exonerate_bin => 'exonerate', 	# assume exported
 		keep_tmp => 0,
-		tmp_root => '',				# set to RAM-disk to increase speed
+		tmp_root => '/tmp',				# set to RAM-disk to increase speed
 		ref => [],
 		qry => [],
 		gmap_sry => undef,
@@ -379,7 +399,7 @@ sub parse_gmap{
 			
 			## exclude
 			# edge mappings
-			unless($self->{allow_edge_mappings}){
+			unless($self->{include_edge_mappings}){
 				# check if mapping is to close to an end
 				if(
 					$p0->{qry_len} > $p0->{ref_hit_to}
@@ -394,7 +414,7 @@ sub parse_gmap{
 			# TODO
 			
 			# multi exon genomic
-			unless($opt{splice}){
+			unless($opt{transcriptomic}){
 				if($p0->{number_of_exons} > 1){
 					$S{excluded}{multi_exon_count}++;
 					next;
@@ -431,7 +451,7 @@ sub parse_gmap{
 
 				if($p1){ # for some reasons there are single exon chimeras
 					# multi exon genomic
-					unless($opt{splice}){
+					unless($opt{transcriptomic}){
 						if($p1->{number_of_exons} > 1){
 							$S{excluded}{multi_exon_count}++;
 							next;
@@ -594,7 +614,7 @@ realignment of TRANSCRIPTOMIC reads using exonerate
 		--querytype dna
 		--targettype dna
 	),
-	$opt{splice} ? qw(--model e2g) : qw(--model a:b),
+	$opt{transcriptomic} ? qw(--model e2g) : qw(--model a:b),
 	qw(
 		--exhaustive 1
 		--bestn 1
@@ -669,8 +689,81 @@ realignment of TRANSCRIPTOMIC reads using exonerate
 
 
 
+sub stats{
+	my $self = shift;
+	
+		
+	# combined stats
+	my $exo_stats = $self->{stats}{exo};
+	foreach my $type(qw(refined bypass)){
+		foreach (keys %{$exo_stats->{$type}}){
+			$exo_stats->{'re+by'}{$_} += $exo_stats->{$type}{$_}
+		} 
+	}
+	
+	my $path_stats = $self->{stats}{gmap}{p0};
+	foreach my $type(keys %$path_stats){
+		next if $type eq 'chimera';
+		foreach (keys %{$path_stats->{$type}}){
+			$path_stats->{'1-5'}{$_} += $path_stats->{$type}{$_}
+		} 
+	}
+	
+	
+	$L->debug(Dumper($self->{stats}));
+	
+	
+	my $ofh = \*STDOUT;
+
+	if($opt{out} && $opt{out} ne '-'){
+		open($ofh, ">", $opt{out});
+	}
+
+	my $pat = "%s:%s\t%0.3f".("\t%d"x6)."\n";
 
 
+	my $stats = $self->{stats}{gmap}{p0};
+	my $type;
+	my @cs = qw(nr ma mm de in dr);
+
+	# header
+	printf $ofh "%s".("\t%s"x7)."\n", '# source', qw( idy reads match mismatch deletion insertion dropped);
+	print $ofh ('-'x100)."\n";
+
+	foreach $type (sort keys %{$stats}){
+		next if $type eq 'chimera' or $type eq '1-5';
+		printf $ofh $pat, 'gmap:paths', $type, _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
+	}
+	print $ofh ('-'x100)."\n";
+	$type = '1-5';
+	printf $ofh $pat, 'gmap:paths', $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
+	
+	print $ofh "\n";
+	$type = 'chimera';
+	printf $ofh $pat, 'gmap', $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
+	print $ofh "\n";
+	
+	$stats = $self->{stats}{exo};
+	foreach $type(qw(bypass preref refined)){
+		printf $ofh $pat, 'exo', $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
+	}
+
+	print $ofh ('-'x100)."\n";
+	$type = 're+by';
+	printf $ofh $pat, 'exo', $type,  _acc($stats->{$type}) || -1, @{$stats->{$type}}{@cs};
+
+	if($opt{out} && $opt{out} ne '-'){
+		close $ofh;
+	}
+}
+
+
+sub _acc{
+	my $s = shift;
+	my $bases = $s->{ma}+$s->{mm}+$s->{de}+$s->{in}+$s->{dr};
+	return undef unless $bases;
+	return $s->{ac} = $s->{ma} * 100 / $bases;
+}
 
 1;
 
