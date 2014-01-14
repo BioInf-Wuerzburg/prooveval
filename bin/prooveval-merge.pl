@@ -4,6 +4,10 @@ use strict;
 
 use Pod::Usage;
 use Getopt::Long;
+use Log::Log4perl qw(:no_extra_logdie_message);
+use Log::Log4perl::Level;
+my $L = Log::Log4perl::get_logger();
+use Data::Dumper;
 
 =head1 NAME
 
@@ -27,6 +31,16 @@ see git log
 
 my %opt;
 
+# init a root logger in exec mode
+Log::Log4perl->init(\q(
+	log4perl.rootLogger					= INFO, Screen
+	log4perl.logger.Phrap				= WARN, Screen
+	log4perl.appender.Screen			= Log::Log4perl::Appender::Screen
+	log4perl.appender.Screen.stderr		= 1
+	log4perl.appender.Screen.layout		= PatternLayout
+	log4perl.appender.Screen.layout.ConversionPattern = [%d{yy-MM-dd HH:mm:ss}] [prooveval-merge.pl] %m%n
+));
+
 GetOptions( 	# NOTE: defaults are set in new();
 	\%opt, qw(
 		help|h
@@ -34,6 +48,8 @@ GetOptions( 	# NOTE: defaults are set in new();
 ) or exit(255);
 
 pod2usage(1) if $opt{help};
+
+$L->info('Merging '.@ARGV." files (\n\t".join("\n\t",@ARGV).")");
 
 
 my @i;
@@ -62,9 +78,11 @@ foreach(@i){
 			my $c = $r->[$j];
 			$o[$i][$j]+=$c;
 		}
-		$o[$i][1] = acc(@{$r}[3..$#{$r}]);
+		$o[$i][1] = sprintf("%0.3f", acc(@{$r}[3..$#{$r}]));
 	}
 }
+
+$L->debug(Dumper(\@i, \@o));
 
 foreach(@o){
 	print join("\t", @$_),"\n";

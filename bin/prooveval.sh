@@ -16,12 +16,12 @@ popd > /dev/null
 
 SEQCHUNKER=SeqChunker;
 THREAD_NUM=1;
-OUT="";
+OUT="prooveval";
 
 show_usage()
 {
-	echo "Usage: prooveval.sh [OPTIONS] -g <GMAPSRY> -- <prooveval passthrough parameter>"
-	echo " e.g.: prooveval.sh -t 20 -g ecoli.fa.sry -- -r EcGen.fa -q ecoli.fa"
+	echo "Usage: prooveval.sh [OPTIONS] -g <GMAPSRY> -- <prooveval passthrough parameter> > STATS"
+	echo " e.g.: prooveval.sh -t 20 -g ecoli.fa.sry -- -r EcGen.fa -q ecoli.fa > ecoli.fa.stats"
 }
 
 show_help()
@@ -110,4 +110,6 @@ done;)
 echo "$CMDS" | xargs -n1 -P $THREAD_NUM bash -c 
 
 # merge results
-perl "$BD"/prooveval-merge.pl "$OUT";
+perl "$BD"/prooveval-merge.pl "$OUT".*.stats;
+
+rm "$OUT".*.stats;
