@@ -354,6 +354,11 @@ sub new{
 			--exhaustive 1
 			--subopt n
 			--frameshift -5
+
+			--gapopen -5
+			--gapextend -3
+			--codongapopen -5 
+			--codongapextend -3
 	
 			--showalignment 1 
 			--alignmentwidth 150 
