@@ -847,8 +847,12 @@ realignment of TRANSCRIPTOMIC reads using exonerate
 	$target_id, $target_start, $target_end, $target_strand, $score,
 	@cigar) = split(/\s+/, $exo_cigar[0]);
 	
+	
 	my %cigar;
 	for(my $i=0; $i<@cigar; $i+=2 ){
+		# cigar D>10 =^ intron if transcriptomic -> ignore
+		next if ($cigar[$i] eq 'D' && $self->{transcriptomic} && $cigar[$i+1] > 10);
+		
 		$cigar{$cigar[$i]}+= $cigar[$i+1];
 	}
 	
