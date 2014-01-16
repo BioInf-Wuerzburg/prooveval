@@ -81,10 +81,12 @@ Reference file, usually genome.
 
 Query read file.
 
-=item -g|--gmap-sry=<GMAPSRY|->
+=item -g|--gmap-sry=<GMAPSRY> [STDIN]
 
-Gmap mapping results for --qry against --ref in gmap summary format. '-' 
- for STDIN. 
+Gmap mapping results for --qry against --ref in gmap summary format. Unless
+ specified STDIN is read.
+
+NOTE: use 'pv <.sry> | prooveval ...' to get a progress bar.
 
 =item [-u|--uncorrected] []
 
@@ -204,7 +206,7 @@ sub _Main{
 	pod2usage(1) if $opt{help};
 	
 	# required	
-	for(qw(ref qry gmap_sry)){
+	for(qw(ref qry)){
 		pod2usage("required: --$_") unless defined ($opt{$_}) 
 	};
 	
@@ -217,14 +219,6 @@ sub _Main{
 	my $self = $class->new(%opt);
 
 	## run
-		
-	# run gmap (unless gmap-sry)
-		# ref: db
-		# mapping
-	unless ($self->{gmap_sry}){
-		$self->run_gmap();
-	}
-	
 	# parse gmap-sry
 	# exonerate
 		# ref: db, cut using gmap coords
@@ -519,16 +513,20 @@ sub parse_gmap{
 
 	$L->info('Parsing gmap summary and running exonerate refinements');
 
-	$L->debug('Setting up gmap summary parser');
+	$L->debug('Setting up gmap summary parser', $self->{gmap_sry});
 	
-	$L->logdie("Gmap summary file required") unless $self->{gmap_sry} && (-e $self->{gmap_sry} || $self->{gmap_sry} eq '-');
+	my $gmap_sry;
+	if ($self->{gmap_sry} && $self->{gmap_sry} ne '-'){
+		$gmap_sry = $self->{gmap_sry};
+	}
 	
-	my $gmap_sry = $self->{gmap_sry} eq '-' ? undef : $self->{gmap_sry};
+	$L->info("Gmap::Parser: Reading ", $gmap_sry ? $gmap_sry : "STDIN");
 	
 	my $gp = Gmap::Parser->new(file => $gmap_sry)->check_format() 
 	|| $L->exit("$self->{gmap_sry} does not look like gmap summary"); # defaults to &STDIN
 	
 	$L->debug("Instanciated gmap parser");
+	
 	
 	my %S = %{$self->{stats}};
 	$self->{stats} = \%S;
