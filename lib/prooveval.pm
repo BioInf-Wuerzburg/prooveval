@@ -349,9 +349,9 @@ sub new{
 			--targettype dna
 		),
 		$opt{transcriptomic} ? qw(--model e2g) : qw(--model a:b),
+		$opt{map_unc} ? qw(--bestn 2) : qw(--bestn 1),
 		qw(
 			--exhaustive 1
-			--bestn 2
 			--subopt n
 			--frameshift -5
 	
