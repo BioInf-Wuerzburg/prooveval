@@ -88,11 +88,18 @@ Gmap mapping results for --qry against --ref in gmap summary format. Unless
 
 NOTE: use 'pv <.sry> | prooveval ...' to get a progress bar.
 
-=item [-u|--uncorrected] []
+=item [-u|--uncorrected]
 
-Uncorrected reads. Only works with untrimmed corrected reads and identical 
- ids. Implies --refine-all as every uncorrected sequence needs to be aligned
- with exonerate.
+Uncorrected reads, used as basis for throughput calculation etc.
+
+=item [-m|--map-uncorrected]
+
+Additionally map uncorrected reads together with query reads of same id onto
+ reference to get "uncorrected accuracy". This only works with reads of 
+ identical ids, e.g. untrimmed corrected reads.
+ 
+Implies --refine-all as every uncorrected sequence needs to be aligned with
+ exonerate.
 
 =item [-o|--out=<PATH|->] [`basename --qry`]
 
@@ -186,7 +193,8 @@ sub _Main{
 			ref|r=s
 			qry|q=s
 			gmap_sry|gmap-sry|g=s
-			unc|uncorrected|u=s
+			unc|uncorrected-stas|u=s
+			map_unc|map-uncorrected|m!
 			out|o=s
 			transcriptomic|x!
 			thread_num|threads|t=i
@@ -271,6 +279,7 @@ sub new{
 		ref => undef,
 		qry => undef,
 		unc => undef,
+		map_unc => undef,
 		gmap_sry => undef,
 		thread_num => 1,
 		refine_all => 0,
@@ -306,7 +315,7 @@ sub new{
 	bless $self, $proto;
 
 	# every uncorrected seq needs to be aligned with exonerate
-	$self->{refine_all}++ if $self->{unc};
+	$self->{refine_all}++ if $self->{unc} && $self->{map_unc};
 
 	# tmp dir
 	$L->debug('Setting up tmp...');
@@ -465,7 +474,6 @@ sub prep_qry{
 	$self->{stats}{in_corrected}{to} = $ql_tot;
 	$self->{stats}{in_corrected}{ql} = \@ql;
 	$self->{stats}{in_corrected}{nr} = scalar @ids;
-	
 }
 
 =head2 prep_unc
@@ -492,17 +500,7 @@ sub prep_unc{
 	$self->{stats}{in_uncorrected}{to} = $ql_tot;
 	$self->{stats}{in_uncorrected}{ql} = \@ql;
 	$self->{stats}{in_uncorrected}{nr} = scalar @ids;
-		
 }
-
-=head2 run_gmap
-
-=cut
-
-sub run_gmap{
-	$L->logdie('Running gmap within pipeline not yet implemented!');
-}
-
 
 =head2 parse_gmap
 
@@ -726,16 +724,23 @@ sub parse_gmap{
 sub gmap2seqs{
 	my ($self, $r, $c) = @_;
 	my $p0 = $r->{paths}[0];
+
+	# extract reference subseq
 	my ($from, $to) = sort{$a <=> $b}($p0->{ref_hit_from}, $p0->{ref_hit_to});
 	$from-= $p0->{qry_len}*1.5;
 	$to+= $p0->{qry_len}*1.5;
+	my $ref = $self->{ref_store}->get_seq($p0->{ref_id}, $from, $to);
+
+	# get qry
 	my $qry = $self->{qry_store}->get_seq($r->id);
+	
+	# get uncorrected if required
 	my $unc;
-	if($self->{unc}){
+	if($self->{unc} && $self->{map_unc}){
 		$unc = $self->{unc_store}->get_seq($r->id);
 		push @{$self->{stats}{exo_uncorrected}{ql}}, length($unc->seq);
 	}
-	my $ref = $self->{ref_store}->get_seq($p0->{ref_id}, $from, $to);
+	
 	
 	open (QRY, '>', $self->tmp_qry($c)) or $L->logdie($!,": ", $self->tmp_qry($c));
 	open (REF, '>', $self->tmp_ref($c)) or $L->logdie($!,": ", $self->tmp_ref($c));
@@ -847,7 +852,7 @@ realignment of TRANSCRIPTOMIC reads using exonerate
 	$self->{stats}{exo_refined}{bp}{de}+= $cigar{'D'} || 0;
 	$self->{stats}{exo_refined}{bp}{in}+= $cigar{'I'} || 0;
 	
-	if($self->{unc}){
+	if($self->{unc_map}){
 		
 		my ($qid,$qlen,$qalnlen,$et,$em)= split("\t", $exo_ryo[1]);
 		$self->{stats}{exo_uncorrected}{nr}++;
@@ -898,8 +903,10 @@ sub stats{
 	
 	foreach my $x (values %$S){
 		if($x->{ql}){
-			# primary way to get total bp: via seq lengths
-			$x->{to}+=$_ for @{$x->{ql}};
+			if(!$x->{to}){
+				# primary way to get total bp: via seq lengths
+				$x->{to}+=$_ for @{$x->{ql}};
+			}
 			
 			my %nx = Nx(lengths => $x->{ql}, N => [50]);
 			$x->{N50} = $nx{50};
@@ -916,8 +923,8 @@ sub stats{
 
 	# needs its own cycle to make sure {exo_uncorrected}{to} has been computed
 	foreach my $x (values %$S){
-		if($x->{to} && $S->{exo_uncorrected}{to}){
-			$x->{tp} = sprintf("%0.2f", $x->{to} / $S->{exo_uncorrected}{to})
+		if($x->{to} && $S->{in_uncorrected}{to}){
+			$x->{tp} = sprintf("%0.2f", $x->{to} / $S->{in_uncorrected}{to})
 		}else{
 			$x->{tp} = undef;
 		}
@@ -932,11 +939,42 @@ sub stats{
 		open($ofh, ">", $opt{out});
 	}
 
+	print $ofh "ref: ",$self->{ref},"\n";
+	print $ofh "cor: ",$self->{qry},"\n";
+	print $ofh "unc: ",$self->{unc},"\n";
+	
 	print $ofh join("\t", qw(category R_used R_total  bp:to bp/unc bp:N50 ma/to bp:ma bp:mm bp:de bp:in bp:dr)),"\n";
-	print $ofh ('-'x104)."\n";
-
-	foreach my $k(sort keys %$S){
-		print join("\t", map{defined $_ ? $_ : '-NA-'}( 
+	
+	my $sep = ('-'x104)."\n";
+	my @categories = qw(
+		--summary
+		in_uncorrected
+		exo_uncorrected
+		in_corrected
+		exo_re+by
+		--details
+		gmap_unmapped
+		gmap_chimera
+		gmap_edge_mapped
+		gmap_multi_exon
+		gmap_p0:1
+		gmap_p0:1-5
+		gmap_p0:2
+		gmap_p0:3
+		gmap_p0:4
+		gmap_p0:5
+		exo_bypass
+		exo_preref
+		exo_refined
+	);
+	
+	foreach my $k(@categories){
+		if($k =~ /^--/){
+			print $k.$sep;
+			next;
+		}
+		
+		print $ofh join("\t", map{defined $_ ? $_ : '-NA-'}( 
 			substr($k, 0, 14), 
 			$S->{$k}{nr}, 				# R_used
 			$self->{record_count}, 		# R_total
