@@ -943,7 +943,7 @@ sub stats{
 	print $ofh "cor: ",$self->{qry},"\n";
 	print $ofh "unc: ",$self->{unc},"\n";
 	
-	print $ofh join("\t", qw(category R_used R_total  bp:to bp/unc bp:N50 ma/to bp:ma bp:mm bp:de bp:in bp:dr)),"\n";
+	print $ofh join("\t", qw(category R_used R_total  bp:total bp/unc bp:N50 ma/to bp:match bp:mm bp:de bp:in bp:dr)),"\n";
 	
 	my $sep = ('-'x104)."\n";
 	my @categories = qw(
