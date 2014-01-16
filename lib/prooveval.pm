@@ -308,6 +308,7 @@ sub new{
 			exo_bypass => empty_stats(),
 			exo_preref => empty_stats(),
 			exo_uncorrected => empty_stats(),
+			exo_unmapped => empty_stats(),
 		},
 		_thread_queue_length => 50,
 	};
@@ -826,7 +827,11 @@ realignment of TRANSCRIPTOMIC reads using exonerate
 
 	#print Dumper(\@tmp_exo);
 	
-	$L->logcroak('Missing exonerate alignment: ', $self->tmp_qry($c)) unless @exo_ryo && @exo_cigar;
+	unless(@exo_ryo && @exo_cigar){
+		$L->debug('Excluded: exo_unmapped');
+		$self->{stats}{exo_refined}{nr}++;
+		unlink $tmp_ref, $tmp_qry unless $self->{keep_tmp};
+	}
 	
 	s/^>// for @exo_ryo;
 		
