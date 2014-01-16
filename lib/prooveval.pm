@@ -930,7 +930,7 @@ sub stats{
 	# needs its own cycle to make sure {exo_uncorrected}{to} has been computed
 	foreach my $x (values %$S){
 		if($x->{to} && $S->{in_uncorrected}{to}){
-			$x->{tp} = sprintf("%0.2f", $x->{to} / $S->{in_uncorrected}{to})
+			$x->{tp} = sprintf("%0.2f", $x->{to} *100 / $S->{in_uncorrected}{to})
 		}else{
 			$x->{tp} = undef;
 		}
@@ -949,7 +949,7 @@ sub stats{
 	print $ofh "cor: ",$self->{qry},"\n";
 	print $ofh "unc: ",$self->{unc},"\n";
 	
-	print $ofh join("\t", qw(category R_used R_total  bp:total bp/unc bp:N50 ma/to bp:match bp:mm bp:de bp:in bp:dr)),"\n";
+	print $ofh join("\t", qw(category R_used R_total  bp:total %bp:unc bp:N50 %ma/to bp:match bp:mm bp:de bp:in bp:dr)),"\n";
 	
 	my $sep = ('-'x104)."\n";
 	my @categories = qw(
@@ -972,6 +972,7 @@ sub stats{
 		exo_bypass
 		exo_preref
 		exo_refined
+		--
 	);
 	
 	foreach my $k(@categories){
