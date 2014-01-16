@@ -831,6 +831,7 @@ realignment of TRANSCRIPTOMIC reads using exonerate
 		$L->debug('Excluded: exo_unmapped');
 		$self->{stats}{exo_refined}{nr}++;
 		unlink $tmp_ref, $tmp_qry unless $self->{keep_tmp};
+		return;
 	}
 	
 	s/^>// for @exo_ryo;
