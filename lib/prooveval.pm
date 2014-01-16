@@ -86,11 +86,17 @@ Query read file.
 Gmap mapping results for --qry against --ref in gmap summary format. '-' 
  for STDIN. 
 
+=item [-u|--uncorrected] []
+
+Uncorrected reads. Only works with untrimmed corrected reads and identical 
+ ids. Implies --refine-all as every uncorrected sequence needs to be aligned
+ with exonerate.
+
 =item [-o|--out=<PATH|->] [`basename --qry`]
 
 Output prefix. '-' for STDOUT.
 
-=item [-t|transcriptomic] [OFF]
+=item [-x|transcriptomic] [OFF]
 
 Expect spliced mappings in gmap and exonerate.
 
@@ -177,9 +183,10 @@ sub _Main{
 		\%opt, qw(
 			ref|r=s
 			qry|q=s
-			out|o=s
 			gmap_sry|gmap-sry|g=s
-			transcriptomic|s!
+			unc|uncorrected|u=s
+			out|o=s
+			transcriptomic|x!
 			thread_num|threads|t=i
 			refine_partials|refine-partials!
 			refine_all|refine-all!
@@ -267,18 +274,24 @@ sub new{
 		exonerate_bin => 'exonerate', 	# assume exported
 		keep_tmp => 0,
 		tmp_root => '/tmp',				# set to RAM-disk to increase speed
-		ref => [],
-		qry => [],
+		ref => undef,
+		qry => undef,
+		unc => undef,
 		gmap_sry => undef,
 		thread_num => 1,
+		refine_all => 0,
+		refine_partials => 1,
 		# overwrite with params
 		@_,
 		# protected
 		tmp => undef,
 		ref_store => undef,
+		unc_store => undef,
 		qry_store => undef,
-		record_count => 0, 
+		record_count => 0,
 		stats => {
+			in_corrected => empty_stats(),
+			in_uncorrected => empty_stats(),
 			gmap_unmapped => empty_stats(),
 			gmap_chimera => empty_stats(),
 			gmap_edge_mapped => empty_stats(),
@@ -291,12 +304,15 @@ sub new{
 			exo_refined => empty_stats(),
 			exo_bypass => empty_stats(),
 			exo_preref => empty_stats(),
+			exo_uncorrected => empty_stats(),
 		},
 		_thread_queue_length => 50,
 	};
 
-
 	bless $self, $proto;
+
+	# every uncorrected seq needs to be aligned with exonerate
+	$self->{refine_all}++ if $self->{unc};
 
 	# tmp dir
 	$L->debug('Setting up tmp...');
@@ -318,8 +334,8 @@ sub new{
 	$L->debug("tmp dir: ", $self->{tmp});
 
 	# prepare thread
-	$self->{tmp_qry_patt} = File::Spec->catfile($self->{tmp},"qry.%d.fa");
 	$self->{tmp_ref_patt} = File::Spec->catfile($self->{tmp},"ref.%d.fa");
+	$self->{tmp_qry_patt} = File::Spec->catfile($self->{tmp},"qry.%d.fa");
 	$self->{tmp_exo_patt} = File::Spec->catfile($self->{tmp},"exonerate#%d.fa");
 	
 	
@@ -331,7 +347,7 @@ sub new{
 		$opt{transcriptomic} ? qw(--model e2g) : qw(--model a:b),
 		qw(
 			--exhaustive 1
-			--bestn 1
+			--bestn 2
 			--subopt n
 			--frameshift -5
 	
@@ -374,7 +390,7 @@ sub new{
 			}
 			
 			# return
-			return %{$self->{stats}{exo_refined}}; # cant return $self ref, gets destroyed
+			return (\%{$self->{stats}{exo_refined}}, \%{$self->{stats}{exo_uncorrected}}); # cant return $self ref, gets destroyed
 		})
 	};
 
@@ -390,6 +406,8 @@ sub new{
 
 	$self->prep_ref();
 	$self->prep_qry();
+	$self->prep_unc() if $self->{unc};
+	
 
 	$L->debug('Loaded/created ref and qry db...');
 
@@ -440,8 +458,48 @@ sub prep_qry{
 	my ($self) = @_;
 	$L->info("Preparing query db");
 	$self->{qry_store} = SeqStore->new(path => $self->{qry});
+	
+	my @ql;
+	my $ql_tot = 0;
+	my @ids = $self->{qry_store}{db}->ids;
+	foreach (@ids){
+		my $ql = $self->{qry_store}{db}->length($_);
+		push @ql, $ql;
+		$ql_tot += $ql;
+	}
+	
+	$self->{stats}{in_corrected}{to} = $ql_tot;
+	$self->{stats}{in_corrected}{ql} = \@ql;
+	$self->{stats}{in_corrected}{nr} = scalar @ids;
+	
 }
 
+=head2 prep_unc
+
+Prepare uncorrected read data (Index, db)
+
+=cut
+
+sub prep_unc{
+	my ($self) = @_;
+	$L->info("Preparing uncorrected db");
+	$self->{unc_store} = SeqStore->new(path => $self->{unc});
+
+
+	my @ql;
+	my $ql_tot = 0;
+	my @ids = $self->{unc_store}{db}->ids;
+	foreach (@ids){
+		my $ql = $self->{unc_store}{db}->length($_);
+		push @ql, $ql;
+		$ql_tot += $ql;
+	}
+	
+	$self->{stats}{in_uncorrected}{to} = $ql_tot;
+	$self->{stats}{in_uncorrected}{ql} = \@ql;
+	$self->{stats}{in_uncorrected}{nr} = scalar @ids;
+		
+}
 
 =head2 run_gmap
 
@@ -615,7 +673,7 @@ sub parse_gmap{
 			};
 			
 			
-			if($opt{refine_all} || ($opt{refine_partials} && $dr)){
+			if($self->{refine_all} || ($self->{refine_partials} && $dr)){
 				# exonerate
 				$L->debug("Enqueuing record for refinement");
 				$self->{stats}{exo_preref}{nr}++;
@@ -653,7 +711,9 @@ sub parse_gmap{
 	# join threads and integrate refined exonerate stats
 	foreach (threads->list()){
 		$L->debug("Joining thread#".$_->tid());
-		append_stats($self->{stats}{exo_refined}, {$_->join()});
+		my ($exo_refined, $exo_uncorrected) = $_->join();
+		append_stats($self->{stats}{exo_refined}, $exo_refined);
+		append_stats($self->{stats}{exo_uncorrected}, $exo_uncorrected);
 
 	}
 	
@@ -672,12 +732,18 @@ sub gmap2seqs{
 	$from-= $p0->{qry_len}*1.5;
 	$to+= $p0->{qry_len}*1.5;
 	my $qry = $self->{qry_store}->get_seq($r->id);
+	my $unc;
+	if($self->{unc}){
+		$unc = $self->{unc_store}->get_seq($r->id);
+		push @{$self->{stats}{exo_uncorrected}{ql}}, length($unc->seq);
+	}
 	my $ref = $self->{ref_store}->get_seq($p0->{ref_id}, $from, $to);
 	
 	open (QRY, '>', $self->tmp_qry($c)) or $L->logdie($!,": ", $self->tmp_qry($c));
 	open (REF, '>', $self->tmp_ref($c)) or $L->logdie($!,": ", $self->tmp_ref($c));
 
 	print QRY $qry;
+	print QRY $unc if defined $unc;
 	print REF $ref;
 	
 	close QRY;
@@ -747,7 +813,9 @@ realignment of TRANSCRIPTOMIC reads using exonerate
 	my $tmp_qry = $self->tmp_qry($c);
 	my $tmp_exo = $self->tmp_exo(threads->tid());
 	
-	my @tmp_exo = qx($self->{exonerate_bin} $self->{exo_opt} $tmp_qry $tmp_ref | tee -a $tmp_exo); # TODO: use tee tmp_file  
+	my $exo_cmd = "$self->{exonerate_bin} $self->{exo_opt} $tmp_qry $tmp_ref";
+	$L->debug($exo_cmd);
+	my @tmp_exo = qx($exo_cmd | tee -a $tmp_exo); # TODO: use tee tmp_file  
 	chomp @tmp_exo;
 	
 	my @exo_ryo = grep {/^>/}@tmp_exo;
@@ -755,24 +823,44 @@ realignment of TRANSCRIPTOMIC reads using exonerate
 
 	#print Dumper(\@tmp_exo);
 	
-	foreach (@exo_ryo){
-		s/^>//;
-		my ($qid,$qlen,$qalnlen,$et,$em)= split("\t");
-		#printf ("$_\t%0.2f\n", $qalnlen/$qlen*100);
-		#$qsim/=100;
-		$self->{stats}{exo_refined}{nr}++;
-		$self->{stats}{exo_refined}{bp}{ma}+=$et;
-		$self->{stats}{exo_refined}{bp}{mm}+=$em;
-		$self->{stats}{exo_refined}{bp}{dr}+=($qlen - $qalnlen);
+	$L->logcroak('Missing exonerate alignment: ', $self->tmp_qry($c)) unless @exo_ryo && @exo_cigar;
+	
+	s/^>// for @exo_ryo;
 		
+	my ($qid,$qlen,$qalnlen,$et,$em)= split("\t", $exo_ryo[0]);
+	$self->{stats}{exo_refined}{nr}++;
+	$self->{stats}{exo_refined}{bp}{ma}+=$et;
+	$self->{stats}{exo_refined}{bp}{mm}+=$em;
+	$self->{stats}{exo_refined}{bp}{dr}+=($qlen - $qalnlen);
+	push @{$self->{stats}{exo_refined}{ql}}, $qlen;
+		
+	my ($cigar, $query_id, $query_start, $query_end, $query_strand,
+	$target_id, $target_start, $target_end, $target_strand, $score,
+	@cigar) = split(/\s+/, $exo_cigar[0]);
+	
+	my %cigar;
+	for(my $i=0; $i<@cigar; $i+=2 ){
+		$cigar{$cigar[$i]}+= $cigar[$i+1];
 	}
 	
+	my @unknown_cigar = grep{/[^DIM]/}keys %cigar;
+	$L->logdie("Unknown cigars: @unknown_cigar") if @unknown_cigar; 
 	
-	foreach (@exo_cigar){
+	$self->{stats}{exo_refined}{bp}{de}+= $cigar{'D'} || 0;
+	$self->{stats}{exo_refined}{bp}{in}+= $cigar{'I'} || 0;
+	
+	if($self->{unc}){
+		
+		my ($qid,$qlen,$qalnlen,$et,$em)= split("\t", $exo_ryo[1]);
+		$self->{stats}{exo_uncorrected}{nr}++;
+		$self->{stats}{exo_uncorrected}{bp}{ma}+=$et;
+		$self->{stats}{exo_uncorrected}{bp}{mm}+=$em;
+		$self->{stats}{exo_uncorrected}{bp}{dr}+=($qlen - $qalnlen);
+
 		my ($cigar, $query_id, $query_start, $query_end, $query_strand,
 		$target_id, $target_start, $target_end, $target_strand, $score,
-		@cigar) = split(/\s+/, $_);
-
+		@cigar) = split(/\s+/, $exo_cigar[1]);
+		
 		my %cigar;
 		for(my $i=0; $i<@cigar; $i+=2 ){
 			$cigar{$cigar[$i]}+= $cigar[$i+1];
@@ -781,9 +869,11 @@ realignment of TRANSCRIPTOMIC reads using exonerate
 		my @unknown_cigar = grep{/[^DIM]/}keys %cigar;
 		$L->logdie("Unknown cigars: @unknown_cigar") if @unknown_cigar; 
 		
-		$self->{stats}{exo_refined}{bp}{de}+= $cigar{'D'} || 0;
-		$self->{stats}{exo_refined}{bp}{in}+= $cigar{'I'} || 0;
+		$self->{stats}{exo_uncorrected}{bp}{de}+= $cigar{'D'} || 0;
+		$self->{stats}{exo_uncorrected}{bp}{in}+= $cigar{'I'} || 0;
+
 	}
+	
 
 	unlink $tmp_ref, $tmp_qry unless $self->{keep_tmp};
 	
@@ -797,11 +887,9 @@ sub stats{
 	
 	$L->info("compiling statistics");
 	
-	my $S = $self->{stats};
 	# combined stats
-	
-	$S->{exo_refined}{ql} = $S->{exo_preref}{ql}; 
-	
+	my $S = $self->{stats};
+
 	# exo_re+by
 	$S->{'exo_re+by'} = empty_stats();
 	append_stats($S->{'exo_re+by'}, @{$S}{qw(exo_refined exo_bypass)});
@@ -810,14 +898,34 @@ sub stats{
 	$S->{'gmap_p0:1-5'} = empty_stats();
 	append_stats($S->{'gmap_p0:1-5'}, @{$S}{qw(gmap_p0:1 gmap_p0:2 gmap_p0:3 gmap_p0:4 gmap_p0:5)});
 	
-	foreach (values %$S){
-		if($_->{ql}){
-			my %nx = Nx(lengths => $_->{ql}, N => [50]);
-			$_->{N50} = $nx{50};
+	foreach my $x (values %$S){
+		if($x->{ql}){
+			# primary way to get total bp: via seq lengths
+			$x->{to}+=$_ for @{$x->{ql}};
+			
+			my %nx = Nx(lengths => $x->{ql}, N => [50]);
+			$x->{N50} = $nx{50};
+		}
+		my $idy = _acc($x);
+		$x->{idy} = $idy ? sprintf("%0.3f", $idy) : undef;
+		
+		# secondary way to get total bp: compute from aln stats
+		if($idy && ! $x->{to}){
+			$x->{to}+=$_ for values %{$x->{bp}};
+		}
+		
+	}
+
+	# needs its own cycle to make sure {exo_uncorrected}{to} has been computed
+	foreach my $x (values %$S){
+		if($x->{to} && $S->{exo_uncorrected}{to}){
+			$x->{tp} = sprintf("%0.2f", $x->{to} / $S->{exo_uncorrected}{to})
+		}else{
+			$x->{tp} = undef;
 		}
 	}
 	
-	$L->debug(Dumper($S));
+	#$L->debug(Dumper($S));
 	
 	
 	my $ofh = \*STDOUT;
@@ -826,17 +934,26 @@ sub stats{
 		open($ofh, ">", $opt{out});
 	}
 
-	print $ofh join("\t", qw(category R_total R_category R_N50 B_idy B_match B_mismatch B_deletion B_insertion B_dropped)),"\n";
-	print $ofh ('-'x100)."\n";
+	print $ofh join("\t", qw(category R_used R_total  bp:to bp/unc bp:N50 ma/to bp:ma bp:mm bp:de bp:in bp:dr)),"\n";
+	print $ofh ('-'x104)."\n";
 
 	foreach my $k(sort keys %$S){
-		print join("\t", 
+		print join("\t", map{defined $_ ? $_ : '-NA-'}( 
 			substr($k, 0, 14), 
-			$self->{record_count}, 
-			$S->{$k}{nr}, 
-			$S->{$k}{N50} || '-NA-', 
-			@{$S->{$k}{bp}}{qw(ma mm de in dr)}
-		), "\n";
+			$S->{$k}{nr}, 				# R_used
+			$self->{record_count}, 		# R_total
+			$S->{$k}{to},				# bp:to
+			$S->{$k}{tp},				# bp/unc
+			$S->{$k}{N50},				# bp:N50
+			$S->{$k}{idy},				# ma/to
+			@{$S->{$k}{bp}}{qw(
+				ma 
+				mm 
+				de 
+				in 
+				dr
+			)}
+		)), "\n";
 	}
 
 	if($opt{out} && $opt{out} ne '-'){
@@ -908,9 +1025,13 @@ sub Nx{
 
 sub empty_stats{
 	return {
+		N50 => undef,
+		to => undef,
+		tp => undef,
 		ql => [],
 		nr => 0,
 		bp => {
+			to => 0,
 			ma => 0,
 			mm => 0,
 			de => 0,
