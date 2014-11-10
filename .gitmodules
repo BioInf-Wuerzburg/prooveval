@@ -1,0 +1,9 @@
+[submodule "util/SeqStore"]
+	path = util/SeqStore
+	url = https://github.com/BioInf-Wuerzburg/SeqStore.git
+[submodule "util/perl5lib-Fasta"]
+	path = util/perl5lib-Fasta
+	url = https://github.com/BioInf-Wuerzburg/perl5lib-Fasta.git
+[submodule "util/perl5lib-Gmap"]
+	path = util/perl5lib-Gmap
+	url = https://github.com/BioInf-Wuerzburg/perl5lib-Gmap.git
