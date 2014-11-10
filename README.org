@@ -1,0 +1,79 @@
+** Usage
+#+BEGIN_SRC sh
+  prooveval --help  # option details
+
+  prooveval [<OPTIONS>] --ref <genome.fa> --qry <reads.fa> --gmap-sry <reads.sry> [--uncorrected <raw-reads.fa>]
+
+  # with progress
+  pv <reads.sry> | prooveval [<OPTIONS>] --ref <genome.fa> --qry <reads.fa> --gmap-sry - [--uncorrected <raw-reads.fa>]
+
+  # generate gmap summary
+  gmap -b -B 5 -O -Y -K 9 -w 9 --align [-t 32] -D /gmap_db/dir -d gmap_db_name reads.fa > gmap.sry
+#+END_SRC
+
+** Dependencies
+- [[http://research-pub.gene.com/gmap/][GMAP]]
+- [[https://metacpan.org/pod/Bio::DB::Fasta][Bio::DB::Fasta]]
+
+** Installation
+#+BEGIN_SRC sh
+  git clone --recursive https://github.com/BioInf-Wuerzburg/prooveval.git
+#+END_SRC
+
+** Output
+prooveval first maps query reads with GMAP. In =details=, mapping statistics are
+listed for different categories. Only the first path (p0 = best hit) is
+analysed. Individual stats are available depending on the total amount of paths
+returned (:1 - :5 or more), as ambiguously mapped reads are more likely to
+produce less accurate correction results. Also chimeric mappings, mappings
+extending past reference contig ends and of course unmapped reads are listed
+separately.
+
+After inital mapping, all non-chimeric/non-edge-mappings, category =gmap_p0:1-5=
+are checked for full-length mappings (=bypass=). Partial mappings are realigned
+to the region of the hit using exonerate (=exo_preref= ->
+=exo_refined=). Full-length alignments are important, as in particular sequence
+ends tend to carry more errors, and hence dropped ends will affect accuracy
+assessment.
+
+Final accuracy is determined as the percentage of matches compared to total
+aligned bases of alignments that have either been refined or bypassed the
+full-length filter (=exo_re+by=).
+
+| key      | description                                                    |
+|----------+----------------------------------------------------------------|
+| %bp:unc  | percentage of base pairs in comparion to uncorrected input     |
+| bp:N50   | N50 in base pairs                                              |
+| %ma/to   | percentage of matches compared to total base pairs in category |
+| bp:match | number of matches                                              |
+| bp:mm    | number of mismatches                                           |
+| bp:de    | number of deletions                                            |
+| bp:in    | number of insertions                                           |
+| bp:dr    | number of dropped bases at the end of alignments               |
+
+#+BEGIN_EXAMPLE
+ref: reference.fa
+cor: proovread_run.050X_final.corr.fil.fa
+unc: input_pacbio.fa
+category        R_used  R_total bp:total        %bp:unc bp:N50  %ma/to  bp:match        bp:mm   bp:de   bp:in   bp:dr
+--summary--------------------------------------------------------------------------------------------------------
+in_uncorrected  50765   55666   98213822        100.00  4082    -NA-    0       0       0       0       0
+exo_uncorrecte  0       55666   -NA-    -NA-    -NA-    -NA-    0       0       0       0       0
+in_corrected    55666   55666   76765456        78.16   2206    -NA-    0       0       0       0       0
+exo_re+by       55371   55666   76231506        77.62   2202    99.974  76214948        11333   2011    6786    0
+--details--------------------------------------------------------------------------------------------------------
+gmap_unmapped   70      55666   32156   0.03    1666    -NA-    0       0       0       0       0
+gmap_chimera    219     55666   491780  0.50    3157    97.884  481409  597     0       50      9758
+gmap_edge_mapp  6       55666   10014   0.01    1884    -NA-    0       0       0       0       0
+gmap_multi_exo  0       55666   -NA-    -NA-    -NA-    -NA-    0       0       0       0       0
+gmap_p0:1       52222   55666   72062164        73.37   2213    99.970  72042057        2703    0       2628    16048
+gmap_p0:1-5     55371   55666   76231506        77.62   2202    99.954  76198144        5631    0       3202    26009
+gmap_p0:2       1808    55666   2616289 2.66    2177    99.921  2614315 1555    0       247     259
+gmap_p0:3       576     55666   861982  0.88    2262    99.230  855398  927     0       211     5502
+gmap_p0:4       261     55666   296322  0.30    1621    99.864  295943  194     0       34      175
+gmap_p0:5       504     55666   394749  0.40    1316    98.896  390431  252     0       82      4025
+exo_bypass      54925   55666   75690475        77.07   2203    99.989  75684062        4868    0       3106    0
+exo_preref      446     55666   541031  0.55    2017    95.033  514082  763     0       96      26009
+exo_refined     446     55666   541031  0.55    2017    97.761  530886  6465    2011    3680    0
+----------------------------------------------------------------------------------------------------------
+#+END_EXAMPLE
