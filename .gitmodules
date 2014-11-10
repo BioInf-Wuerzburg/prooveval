@@ -7,3 +7,6 @@
 [submodule "util/perl5lib-Gmap"]
 	path = util/perl5lib-Gmap
 	url = https://github.com/BioInf-Wuerzburg/perl5lib-Gmap.git
+[submodule "util/perl5lib-Verbose"]
+	path = util/perl5lib-Verbose
+	url = https://github.com/BioInf-Wuerzburg/perl5lib-Verbose.git
