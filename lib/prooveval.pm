@@ -20,16 +20,20 @@ use File::Path;
 use File::Basename;
 use File::Spec;
 
+use threads;
+use Thread::Queue;
+
 use Bio::DB::Fasta;
+
+use FindBin '$RealBin';
+use lib "$RealBin/../lib";
+
 use SeqStore;
 use Gmap::Parser;
 use Gmap::Record;
 
 use Fasta::Parser;
 use Fasta::Seq;
-
-use threads;
-use Thread::Queue;
 
 =head1 NAME
 
